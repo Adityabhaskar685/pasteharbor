@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.clipvault" path="/org/gnome/shell/extensions/clipvault/">
+    <key name="show-history" type="as">
+      <default><![CDATA[['<Super>V']]]></default>
+      <summary>Show clipboard history</summary>
+      <description>Keyboard shortcut used by ClipVault to open the clipboard history window.</description>
+    </key>
+  </schema>
+</schemalist>
