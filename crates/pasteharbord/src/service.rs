@@ -18,7 +18,7 @@ impl ClipboardService {
     }
 }
 
-#[interface(name = "io.github.clipvault.Clipboard1")]
+#[interface(name = "io.github.pasteharbor.Clipboard1")]
 impl ClipboardService {
     async fn capture_text(
         &self,
@@ -72,34 +72,49 @@ impl ClipboardService {
         self.database.clear().await.map_err(failed)
     }
 
+    async fn get_settings(&self) -> fdo::Result<String> {
+        let settings = self.database.get_settings().await.map_err(failed)?;
+        serde_json::to_string(&settings).map_err(failed)
+    }
+
+    async fn set_max_history(&self, max_history: u32) -> fdo::Result<u32> {
+        self.database
+            .set_max_history(max_history)
+            .await
+            .map_err(failed)
+    }
+
     async fn show_app(&self) -> fdo::Result<bool> {
         launch_app().map_err(failed)?;
         Ok(true)
     }
 
     async fn health(&self) -> fdo::Result<String> {
-        Ok(json!({"ok": true, "service": "clipvaultd"}).to_string())
+        Ok(json!({"ok": true, "service": "pasteharbord"}).to_string())
     }
 }
 
 fn launch_app() -> anyhow::Result<()> {
-    Command::new(app_executable()).spawn()?;
+    let mut child = Command::new(app_executable()).spawn()?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
     Ok(())
 }
 
 fn app_executable() -> PathBuf {
-    if let Some(path) = env::var_os("CLIPVAULT_APP") {
+    if let Some(path) = env::var_os("PASTEHARBOR_APP") {
         return PathBuf::from(path);
     }
 
     if let Ok(current_exe) = env::current_exe() {
-        let sibling = current_exe.with_file_name("clipvault-app");
+        let sibling = current_exe.with_file_name("pasteharbor-app");
         if sibling.exists() {
             return sibling;
         }
     }
 
-    PathBuf::from("clipvault-app")
+    PathBuf::from("pasteharbor-app")
 }
 
 fn failed(error: impl std::fmt::Display) -> fdo::Error {

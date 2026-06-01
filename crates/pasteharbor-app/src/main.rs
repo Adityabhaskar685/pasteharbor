@@ -1,14 +1,15 @@
 use adw::prelude::*;
+use chrono::DateTime;
 use gtk::glib;
 use serde::Deserialize;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use zbus::blocking::{Connection, Proxy};
 
-const APP_ID: &str = "io.github.clipvault.App";
-const BUS_NAME: &str = "io.github.clipvault";
-const OBJECT_PATH: &str = "/io/github/clipvault/Clipboard1";
-const INTERFACE: &str = "io.github.clipvault.Clipboard1";
+const APP_ID: &str = "io.github.pasteharbor.App";
+const BUS_NAME: &str = "io.github.pasteharbor";
+const OBJECT_PATH: &str = "/io/github/pasteharbor/Clipboard1";
+const INTERFACE: &str = "io.github.pasteharbor.Clipboard1";
 
 #[derive(Debug, Clone, Deserialize)]
 struct ClipboardItem {
@@ -19,6 +20,11 @@ struct ClipboardItem {
     preview_text: String,
     source_app: Option<String>,
     size_bytes: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct DaemonSettings {
+    max_history: u32,
 }
 
 fn main() -> glib::ExitCode {
@@ -35,15 +41,21 @@ fn build_ui(app: &adw::Application) {
 
     let state = Rc::new(AppState::new());
     let ui_settings = Rc::new(UiSettings::default());
+    let cache = Rc::new(RefCell::new(String::new()));
 
     let window = adw::ApplicationWindow::builder()
         .application(app)
-        .title("ClipVault")
-        .default_width(720)
-        .default_height(520)
+        .title("PasteHarbor")
+        .default_width(780)
+        .default_height(620)
         .build();
 
     let header = adw::HeaderBar::new();
+    header.set_title_widget(Some(&adw::WindowTitle::new(
+        "PasteHarbor",
+        "Clipboard history",
+    )));
+
     let refresh_button = gtk::Button::builder()
         .icon_name("view-refresh-symbolic")
         .tooltip_text("Refresh")
@@ -73,11 +85,12 @@ fn build_ui(app: &adw::Application) {
     let status = gtk::Label::builder()
         .halign(gtk::Align::Start)
         .css_classes(vec!["dim-label".to_string()])
-        .label("Start clipvaultd to load history.")
+        .label("Connecting to pasteharbord...")
         .build();
 
     let scroller = gtk::ScrolledWindow::builder()
         .vexpand(true)
+        .hscrollbar_policy(gtk::PolicyType::Never)
         .child(&list)
         .build();
 
@@ -97,13 +110,16 @@ fn build_ui(app: &adw::Application) {
 
     {
         let state = Rc::clone(&state);
+        let cache = Rc::clone(&cache);
         let list = list.clone();
         let status = status.clone();
         let search = search.clone();
         let ui_settings = Rc::clone(&ui_settings);
         refresh_button.connect_clicked(move |_| {
+            cache.borrow_mut().clear();
             refresh_history(
                 &state,
+                &cache,
                 &list,
                 &status,
                 search.text().as_str(),
@@ -114,12 +130,15 @@ fn build_ui(app: &adw::Application) {
 
     {
         let state = Rc::clone(&state);
+        let cache = Rc::clone(&cache);
         let list = list.clone();
         let status = status.clone();
         let ui_settings = Rc::clone(&ui_settings);
         search.connect_search_changed(move |entry| {
+            cache.borrow_mut().clear();
             refresh_history(
                 &state,
+                &cache,
                 &list,
                 &status,
                 entry.text().as_str(),
@@ -130,33 +149,35 @@ fn build_ui(app: &adw::Application) {
 
     {
         let state = Rc::clone(&state);
+        let cache = Rc::clone(&cache);
         let list = list.clone();
         let status = status.clone();
         let search = search.clone();
         let ui_settings = Rc::clone(&ui_settings);
-        clear_button.connect_clicked(move |_| match state.clear() {
-            Ok(count) => {
-                status.set_label(&format!("Cleared {count} history item(s)."));
-                refresh_history(
-                    &state,
-                    &list,
-                    &status,
-                    search.text().as_str(),
-                    ui_settings.row_limit.get(),
-                );
-            }
-            Err(error) => status.set_label(&format!("Could not clear history: {error}")),
+        let parent = window.clone();
+        clear_button.connect_clicked(move |_| {
+            show_clear_confirmation(
+                &parent,
+                &state,
+                &cache,
+                &list,
+                &status,
+                &search,
+                &ui_settings,
+            );
         });
     }
 
     {
         let parent = window.clone();
+        let state = Rc::clone(&state);
         let ui_settings = Rc::clone(&ui_settings);
-        settings_button.connect_clicked(move |_| show_settings(&parent, &ui_settings));
+        settings_button.connect_clicked(move |_| show_settings(&parent, &state, &ui_settings));
     }
 
     {
         let state = Rc::clone(&state);
+        let cache = Rc::clone(&cache);
         let list = list.clone();
         let status = status.clone();
         let search = search.clone();
@@ -165,6 +186,7 @@ fn build_ui(app: &adw::Application) {
             if ui_settings.auto_refresh.get() {
                 refresh_history(
                     &state,
+                    &cache,
                     &list,
                     &status,
                     search.text().as_str(),
@@ -175,34 +197,53 @@ fn build_ui(app: &adw::Application) {
         });
     }
 
-    refresh_history(&state, &list, &status, "", ui_settings.row_limit.get());
+    refresh_history(
+        &state,
+        &cache,
+        &list,
+        &status,
+        "",
+        ui_settings.row_limit.get(),
+    );
     window.present();
 }
 
 fn refresh_history(
     state: &AppState,
+    cache: &RefCell<String>,
     list: &gtk::ListBox,
     status: &gtk::Label,
     query: &str,
     limit: u32,
 ) {
+    let json = match state.items_json(query, limit) {
+        Ok(json) => json,
+        Err(error) => {
+            status.set_label(&format!("pasteharbord is unavailable: {error}"));
+            return;
+        }
+    };
+
+    if cache.borrow().as_str() == json {
+        return;
+    }
+    *cache.borrow_mut() = json.clone();
+
     while let Some(row) = list.first_child() {
         list.remove(&row);
     }
 
-    match state.items(query, limit) {
+    match serde_json::from_str::<Vec<ClipboardItem>>(&json) {
         Ok(items) if items.is_empty() => {
-            status.set_label("No clipboard history yet.");
+            status.set_label("No clipboard history yet. Copy text to get started.");
         }
         Ok(items) => {
-            status.set_label(&format!("{} item(s)", items.len()));
+            status.set_label(&format!("{} recent item(s)", items.len()));
             for item in items {
                 list.append(&history_row(state, &item, status));
             }
         }
-        Err(error) => {
-            status.set_label(&format!("clipvaultd is unavailable: {error}"));
-        }
+        Err(error) => status.set_label(&format!("Could not read clipboard history: {error}")),
     }
 }
 
@@ -210,28 +251,29 @@ fn history_row(state: &AppState, item: &ClipboardItem, status: &gtk::Label) -> g
     let title = gtk::Label::builder()
         .label(&item.preview_text)
         .xalign(0.0)
+        .ellipsize(gtk::pango::EllipsizeMode::End)
+        .lines(2)
         .wrap(true)
         .wrap_mode(gtk::pango::WrapMode::WordChar)
         .build();
 
     let details = gtk::Label::builder()
         .label(format!(
-            "{} | {} bytes | {} | copied {} | used {}",
-            item.kind,
-            item.size_bytes,
+            "{} | {} | {} | last used {}",
             item.source_app.as_deref().unwrap_or("unknown source"),
-            item.created_at,
-            item.last_used_at
+            item.kind,
+            format_bytes(item.size_bytes),
+            format_timestamp(&item.last_used_at)
         ))
         .xalign(0.0)
-        .wrap(true)
-        .wrap_mode(gtk::pango::WrapMode::WordChar)
         .css_classes(vec!["dim-label".to_string()])
+        .ellipsize(gtk::pango::EllipsizeMode::End)
+        .tooltip_text(format!("Captured {}", format_timestamp(&item.created_at)))
         .build();
 
     let copy_button = gtk::Button::builder()
         .icon_name("edit-copy-symbolic")
-        .tooltip_text("Put this item back on the clipboard")
+        .tooltip_text("Copy again")
         .valign(gtk::Align::Center)
         .build();
 
@@ -269,7 +311,7 @@ fn history_row(state: &AppState, item: &ClipboardItem, status: &gtk::Label) -> g
             Ok(text) => {
                 if let Some(display) = gtk::gdk::Display::default() {
                     display.clipboard().set_text(&text);
-                    status.set_label("Copied selected history item to the clipboard.");
+                    status.set_label("Copied selected history item.");
                 }
             }
             Err(error) => status.set_label(&format!("Could not restore item: {error}")),
@@ -291,7 +333,7 @@ fn history_row(state: &AppState, item: &ClipboardItem, status: &gtk::Label) -> g
                 }
                 status.set_label("Deleted history item.");
             }
-            Ok(false) => status.set_label("History item was already gone."),
+            Ok(false) => status.set_label("History item was already deleted."),
             Err(error) => status.set_label(&format!("Could not delete item: {error}")),
         });
     }
@@ -299,25 +341,73 @@ fn history_row(state: &AppState, item: &ClipboardItem, status: &gtk::Label) -> g
     row
 }
 
-fn show_settings(parent: &adw::ApplicationWindow, settings: &Rc<UiSettings>) {
-    let window = gtk::Window::builder()
-        .title("ClipVault Settings")
+fn show_clear_confirmation(
+    parent: &adw::ApplicationWindow,
+    state: &Rc<AppState>,
+    cache: &Rc<RefCell<String>>,
+    list: &gtk::ListBox,
+    status: &gtk::Label,
+    search: &gtk::SearchEntry,
+    ui_settings: &Rc<UiSettings>,
+) {
+    let dialog = gtk::MessageDialog::builder()
         .transient_for(parent)
         .modal(true)
-        .default_width(380)
-        .default_height(180)
+        .message_type(gtk::MessageType::Warning)
+        .text("Clear clipboard history?")
+        .secondary_text("This permanently deletes every stored clipboard item.")
+        .build();
+    dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+    dialog.add_button("Clear", gtk::ResponseType::Accept);
+
+    let state = Rc::clone(state);
+    let cache = Rc::clone(cache);
+    let list = list.clone();
+    let status = status.clone();
+    let search = search.clone();
+    let ui_settings = Rc::clone(ui_settings);
+    dialog.connect_response(move |dialog, response| {
+        if response == gtk::ResponseType::Accept {
+            match state.clear() {
+                Ok(count) => {
+                    cache.borrow_mut().clear();
+                    status.set_label(&format!("Cleared {count} history item(s)."));
+                    refresh_history(
+                        &state,
+                        &cache,
+                        &list,
+                        &status,
+                        search.text().as_str(),
+                        ui_settings.row_limit.get(),
+                    );
+                }
+                Err(error) => status.set_label(&format!("Could not clear history: {error}")),
+            }
+        }
+        dialog.close();
+    });
+    dialog.present();
+}
+
+fn show_settings(parent: &adw::ApplicationWindow, state: &Rc<AppState>, settings: &Rc<UiSettings>) {
+    let window = gtk::Window::builder()
+        .title("PasteHarbor Settings")
+        .transient_for(parent)
+        .modal(true)
+        .resizable(false)
+        .default_width(420)
         .build();
 
-    let auto_refresh_label = gtk::Label::builder()
-        .label("Auto-refresh history")
+    let status = gtk::Label::builder()
         .xalign(0.0)
-        .hexpand(true)
+        .wrap(true)
+        .css_classes(vec!["dim-label".to_string()])
         .build();
+
     let auto_refresh_switch = gtk::Switch::builder()
         .active(settings.auto_refresh.get())
         .valign(gtk::Align::Center)
         .build();
-
     {
         let settings = Rc::clone(settings);
         auto_refresh_switch.connect_active_notify(move |switch| {
@@ -325,23 +415,19 @@ fn show_settings(parent: &adw::ApplicationWindow, settings: &Rc<UiSettings>) {
         });
     }
 
-    let auto_refresh_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    auto_refresh_row.append(&auto_refresh_label);
-    auto_refresh_row.append(&auto_refresh_switch);
-
-    let row_limit_label = gtk::Label::builder()
-        .label("History rows shown")
-        .xalign(0.0)
-        .hexpand(true)
-        .build();
-    let row_limit_adjustment =
-        gtk::Adjustment::new(settings.row_limit.get() as f64, 10.0, 100.0, 5.0, 10.0, 0.0);
+    let row_limit_adjustment = gtk::Adjustment::new(
+        settings.row_limit.get() as f64,
+        10.0,
+        250.0,
+        10.0,
+        25.0,
+        0.0,
+    );
     let row_limit_spin = gtk::SpinButton::builder()
         .adjustment(&row_limit_adjustment)
         .numeric(true)
         .valign(gtk::Align::Center)
         .build();
-
     {
         let settings = Rc::clone(settings);
         row_limit_spin.connect_value_changed(move |spin| {
@@ -349,30 +435,89 @@ fn show_settings(parent: &adw::ApplicationWindow, settings: &Rc<UiSettings>) {
         });
     }
 
-    let row_limit_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    row_limit_row.append(&row_limit_label);
-    row_limit_row.append(&row_limit_spin);
-
-    let close_button = gtk::Button::builder()
-        .label("Close")
-        .halign(gtk::Align::End)
+    let max_history = state
+        .settings()
+        .map(|settings| settings.max_history)
+        .unwrap_or(500);
+    let max_history_adjustment =
+        gtk::Adjustment::new(max_history as f64, 10.0, 10_000.0, 10.0, 100.0, 0.0);
+    let max_history_spin = gtk::SpinButton::builder()
+        .adjustment(&max_history_adjustment)
+        .numeric(true)
+        .valign(gtk::Align::Center)
         .build();
-    {
-        let window = window.clone();
-        close_button.connect_clicked(move |_| window.close());
-    }
 
     let content = gtk::Box::new(gtk::Orientation::Vertical, 14);
     content.set_margin_top(18);
     content.set_margin_bottom(18);
     content.set_margin_start(18);
     content.set_margin_end(18);
-    content.append(&auto_refresh_row);
-    content.append(&row_limit_row);
-    content.append(&close_button);
+    content.append(&settings_row(
+        "Auto-refresh open window",
+        &auto_refresh_switch,
+    ));
+    content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    content.append(&settings_row("Rows shown in window", &row_limit_spin));
+    content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    content.append(&settings_row("Maximum stored history", &max_history_spin));
+    content.append(&status);
+
+    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    buttons.set_halign(gtk::Align::End);
+    let cancel_button = gtk::Button::with_label("Cancel");
+    let save_button = gtk::Button::with_label("Save");
+    save_button.add_css_class("suggested-action");
+    buttons.append(&cancel_button);
+    buttons.append(&save_button);
+    content.append(&buttons);
+
+    {
+        let window = window.clone();
+        cancel_button.connect_clicked(move |_| window.close());
+    }
+    {
+        let state = Rc::clone(state);
+        let window = window.clone();
+        let status = status.clone();
+        save_button.connect_clicked(move |_| {
+            match state.set_max_history(max_history_spin.value_as_int() as u32) {
+                Ok(saved) => {
+                    status.set_label(&format!("Saved maximum history: {saved}"));
+                    window.close();
+                }
+                Err(error) => status.set_label(&format!("Could not save settings: {error}")),
+            }
+        });
+    }
 
     window.set_child(Some(&content));
     window.present();
+}
+
+fn settings_row(label: &str, control: &impl IsA<gtk::Widget>) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    let label = gtk::Label::builder()
+        .label(label)
+        .xalign(0.0)
+        .hexpand(true)
+        .build();
+    row.append(&label);
+    row.append(control);
+    row
+}
+
+fn format_timestamp(timestamp: &str) -> String {
+    DateTime::parse_from_rfc3339(timestamp)
+        .map(|timestamp| timestamp.format("%b %d, %H:%M").to_string())
+        .unwrap_or_else(|_| timestamp.to_string())
+}
+
+fn format_bytes(bytes: i64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    }
 }
 
 #[derive(Clone)]
@@ -387,14 +532,13 @@ impl AppState {
         }
     }
 
-    fn items(&self, query: &str, limit: u32) -> anyhow::Result<Vec<ClipboardItem>> {
+    fn items_json(&self, query: &str, limit: u32) -> anyhow::Result<String> {
         let proxy = self.proxy()?;
-        let json: String = if query.trim().is_empty() {
-            proxy.call("ListRecent", &(limit))?
+        if query.trim().is_empty() {
+            Ok(proxy.call("ListRecent", &(limit))?)
         } else {
-            proxy.call("Search", &(query, limit))?
-        };
-        Ok(serde_json::from_str(&json)?)
+            Ok(proxy.call("Search", &(query, limit))?)
+        }
     }
 
     fn get_text(&self, id: i64) -> anyhow::Result<String> {
@@ -410,6 +554,17 @@ impl AppState {
     fn clear(&self) -> anyhow::Result<u64> {
         let proxy = self.proxy()?;
         Ok(proxy.call("Clear", &())?)
+    }
+
+    fn settings(&self) -> anyhow::Result<DaemonSettings> {
+        let proxy = self.proxy()?;
+        let json: String = proxy.call("GetSettings", &())?;
+        Ok(serde_json::from_str(&json)?)
+    }
+
+    fn set_max_history(&self, max_history: u32) -> anyhow::Result<u32> {
+        let proxy = self.proxy()?;
+        Ok(proxy.call("SetMaxHistory", &(max_history))?)
     }
 
     fn proxy(&self) -> anyhow::Result<Proxy<'_>> {
@@ -432,7 +587,7 @@ impl Default for UiSettings {
     fn default() -> Self {
         Self {
             auto_refresh: Cell::new(true),
-            row_limit: Cell::new(50),
+            row_limit: Cell::new(75),
         }
     }
 }

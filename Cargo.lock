@@ -317,34 +317,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "clipvault-app"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "gtk4",
- "libadwaita",
- "serde",
- "serde_json",
- "zbus",
-]
-
-[[package]]
-name = "clipvaultd"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "blake3",
- "chrono",
- "serde",
- "serde_json",
- "sqlx",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "zbus",
-]
-
-[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1352,6 +1324,35 @@ dependencies = [
  "redox_syscall",
  "smallvec",
  "windows-link",
+]
+
+[[package]]
+name = "pasteharbor-app"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "gtk4",
+ "libadwaita",
+ "serde",
+ "serde_json",
+ "zbus",
+]
+
+[[package]]
+name = "pasteharbord"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "zbus",
 ]
 
 [[package]]

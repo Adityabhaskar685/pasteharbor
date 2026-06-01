@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <schemalist>
-  <schema id="org.gnome.shell.extensions.clipvault" path="/org/gnome/shell/extensions/clipvault/">
+  <schema id="org.gnome.shell.extensions.pasteharbor" path="/org/gnome/shell/extensions/pasteharbor/">
     <key name="show-history" type="as">
       <default><![CDATA[['<Super>V']]]></default>
       <summary>Show clipboard history</summary>
-      <description>Keyboard shortcut used by ClipVault to open the clipboard history window.</description>
+      <description>Keyboard shortcut used by PasteHarbor to open the clipboard history popup.</description>
     </key>
   </schema>
 </schemalist>

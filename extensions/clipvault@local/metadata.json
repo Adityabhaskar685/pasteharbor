@@ -1,7 +1,0 @@
-{
-  "uuid": "clipvault@local",
-  "name": "ClipVault",
-  "description": "Wayland clipboard history bridge for the ClipVault Rust daemon.",
-  "shell-version": ["46", "47", "48", "49", "50"],
-  "settings-schema": "org.gnome.shell.extensions.clipvault"
-}

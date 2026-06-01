@@ -1,85 +1,73 @@
-# ClipVault
+# PasteHarbor
 
-ClipVault is an Ubuntu/GNOME/Wayland clipboard manager prototype with three parts:
+PasteHarbor is a clipboard-history manager for Ubuntu GNOME on Wayland. A GNOME Shell extension captures copied text, a Rust daemon stores it in SQLite through SQLx, and a GTK4/libadwaita app provides a larger history view.
 
-- `clipvaultd`: Rust daemon that stores clipboard history in SQLite through SQLx and exposes a D-Bus API.
-- `clipvault-app`: GTK4/libadwaita Rust app for browsing and clearing history.
-- `extensions/clipvault@local`: GNOME Shell extension that reads/restores clipboard text and talks to the daemon.
+## Features
 
-The first implementation supports text clipboard history. The daemon database and API are intentionally shaped so image, HTML, and file URI support can be added without replacing the architecture.
+- Searchable clipboard popup with a fixed-size scrollable history area
+- Copy, delete, clear-all, pause-capture, and maximum-history controls
+- GTK app with live refresh, search, clear confirmation, and settings
+- SQLx + SQLite storage with duplicate detection and basic secret filtering
+- User systemd service that starts at login and restarts after failures
 
-## Requirements
+PasteHarbor currently stores text only. Image and file support are planned separately.
 
-Ubuntu/GNOME packages:
+## Install
+
+Ubuntu packages:
 
 ```bash
 sudo apt install build-essential pkg-config libgtk-4-dev libadwaita-1-dev libsqlite3-dev
 ```
 
-Rust:
+Install Rust with [rustup](https://rustup.rs/), then run:
 
 ```bash
-rustup default stable
+./scripts/install.sh
 ```
 
-## Build
+Log out and log back in once so GNOME Shell discovers the extension, then enable it:
 
 ```bash
-cargo build
+gnome-extensions enable pasteharbor@local
 ```
 
-## Run The Daemon
+Click the panel icon or press `<Super>V` to open clipboard history. The daemon starts automatically on future logins.
+
+## Service
 
 ```bash
-cargo run -p clipvaultd
+systemctl --user status pasteharbord.service
+systemctl --user restart pasteharbord.service
+journalctl --user -u pasteharbord.service -f
 ```
 
-The daemon creates its database at:
+History is stored at `~/.local/share/pasteharbor/pasteharbor.db`.
+
+## Development
+
+```bash
+cargo check
+cargo test -p pasteharbord
+cargo run -p pasteharbord
+cargo run -p pasteharbor-app
+```
+
+After changing extension JavaScript, reinstall with `./scripts/install.sh`. On Wayland, log out and back in if GNOME Shell still uses an older extension module.
+
+## Uninstall
+
+```bash
+./scripts/uninstall.sh
+```
+
+The uninstall script keeps clipboard history data. Remove `~/.local/share/pasteharbor` manually if you also want to delete stored history.
+
+## Architecture
 
 ```text
-$XDG_DATA_HOME/clipvault/clipvault.db
+GNOME Shell extension -> D-Bus -> pasteharbord -> SQLite
+                                  |
+                                  +-> pasteharbor-app
 ```
 
-or:
-
-```text
-~/.local/share/clipvault/clipvault.db
-```
-
-## Run The GTK App
-
-Start the daemon first, then run:
-
-```bash
-cargo run -p clipvault-app
-```
-
-The app refreshes history automatically while it is open. The panel popup also supports search, restore, delete, clear all, basic settings, and opening the full GTK window.
-
-## Install The GNOME Extension For Development
-
-GNOME Shell discovers manually installed extensions when the shell session starts. On Wayland, install the files first, then log out and log back in before enabling the extension.
-
-Package and install the extension:
-
-```bash
-gnome-extensions pack extensions/clipvault@local --schema=schemas/org.gnome.shell.extensions.clipvault.gschema.xml --out-dir=/tmp -f
-gnome-extensions install --force /tmp/clipvault@local.shell-extension.zip
-```
-
-After logging back in:
-
-```bash
-gnome-extensions list | grep clipvault
-gnome-extensions enable clipvault@local
-```
-
-For symlink-based development, create the symlink before logging out and back in:
-
-```bash
-mkdir -p ~/.local/share/gnome-shell/extensions
-ln -sfnT "$PWD/extensions/clipvault@local" ~/.local/share/gnome-shell/extensions/clipvault@local
-glib-compile-schemas ~/.local/share/gnome-shell/extensions/clipvault@local/schemas
-```
-
-If a copied install already exists at that path, move it aside before creating the symlink. The extension adds a panel indicator and a `<Super>V` keybinding. It polls the shell clipboard for text, sends new text to the Rust daemon, and shows a searchable clipboard popup with copy/delete controls.

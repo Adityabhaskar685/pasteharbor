@@ -8,6 +8,9 @@ use std::str::FromStr;
 
 const MAX_TEXT_BYTES: usize = 1024 * 1024;
 const MAX_PREVIEW_CHARS: usize = 180;
+pub const DEFAULT_MAX_HISTORY: u32 = 500;
+pub const MIN_MAX_HISTORY: u32 = 10;
+pub const MAX_MAX_HISTORY: u32 = 10_000;
 
 #[derive(Clone)]
 pub struct Database {
@@ -23,6 +26,11 @@ pub struct ClipboardItemSummary {
     pub preview_text: String,
     pub source_app: Option<String>,
     pub size_bytes: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AppSettings {
+    pub max_history: u32,
 }
 
 impl Database {
@@ -56,45 +64,48 @@ impl Database {
         let now = Utc::now().to_rfc3339();
         let hash = blake3::hash(text.as_bytes()).to_hex().to_string();
 
-        if let Some(existing_id) = self.find_by_hash(&hash).await? {
+        let id = if let Some(existing_id) = self.find_by_hash(&hash).await? {
             sqlx::query("UPDATE clipboard_items SET last_used_at = ? WHERE id = ?")
                 .bind(&now)
                 .bind(existing_id)
                 .execute(&self.pool)
                 .await?;
-            return Ok(existing_id);
-        }
-
-        let result = sqlx::query(
-            r#"
-            INSERT INTO clipboard_items (
-                created_at,
-                last_used_at,
-                kind,
-                mime_types,
-                preview_text,
-                content_text,
-                content_hash,
-                source_app,
-                sensitive,
-                size_bytes
+            existing_id
+        } else {
+            let result = sqlx::query(
+                r#"
+                INSERT INTO clipboard_items (
+                    created_at,
+                    last_used_at,
+                    kind,
+                    mime_types,
+                    preview_text,
+                    content_text,
+                    content_hash,
+                    source_app,
+                    sensitive,
+                    size_bytes
+                )
+                VALUES (?, ?, 'text', ?, ?, ?, ?, ?, ?, ?)
+                "#,
             )
-            VALUES (?, ?, 'text', ?, ?, ?, ?, ?, ?, ?)
-            "#,
-        )
-        .bind(&now)
-        .bind(&now)
-        .bind(r#"["text/plain;charset=utf-8","text/plain"]"#)
-        .bind(preview_text(text))
-        .bind(text)
-        .bind(hash)
-        .bind(source_app)
-        .bind(i64::from(sensitive))
-        .bind(text.len() as i64)
-        .execute(&self.pool)
-        .await?;
+            .bind(&now)
+            .bind(&now)
+            .bind(r#"["text/plain;charset=utf-8","text/plain"]"#)
+            .bind(preview_text(text))
+            .bind(text)
+            .bind(hash)
+            .bind(source_app)
+            .bind(i64::from(sensitive))
+            .bind(text.len() as i64)
+            .execute(&self.pool)
+            .await?;
 
-        Ok(result.last_insert_rowid())
+            result.last_insert_rowid()
+        };
+
+        self.prune_to_max_history().await?;
+        Ok(id)
     }
 
     pub async fn list_recent(&self, limit: u32) -> anyhow::Result<Vec<ClipboardItemSummary>> {
@@ -148,6 +159,29 @@ impl Database {
         Ok(result.rows_affected())
     }
 
+    pub async fn get_settings(&self) -> anyhow::Result<AppSettings> {
+        Ok(AppSettings {
+            max_history: self.get_max_history().await?,
+        })
+    }
+
+    pub async fn set_max_history(&self, max_history: u32) -> anyhow::Result<u32> {
+        let max_history = normalize_max_history(max_history);
+        sqlx::query(
+            r#"
+            INSERT INTO app_settings (key, value)
+            VALUES ('max_history', ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            "#,
+        )
+        .bind(max_history.to_string())
+        .execute(&self.pool)
+        .await?;
+
+        self.prune_history(max_history).await?;
+        Ok(max_history)
+    }
+
     async fn migrate(&self) -> anyhow::Result<()> {
         sqlx::query(
             r#"
@@ -181,6 +215,28 @@ impl Database {
         .execute(&self.pool)
         .await?;
 
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            INSERT OR IGNORE INTO app_settings (key, value)
+            VALUES ('max_history', ?)
+            "#,
+        )
+        .bind(DEFAULT_MAX_HISTORY.to_string())
+        .execute(&self.pool)
+        .await?;
+
+        self.prune_to_max_history().await?;
         Ok(())
     }
 
@@ -193,12 +249,46 @@ impl Database {
         Ok(row.map(|row| row.get::<i64, _>("id")))
     }
 
+    async fn get_max_history(&self) -> anyhow::Result<u32> {
+        let value = sqlx::query("SELECT value FROM app_settings WHERE key = 'max_history'")
+            .fetch_optional(&self.pool)
+            .await?
+            .and_then(|row| row.try_get::<String, _>("value").ok())
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(DEFAULT_MAX_HISTORY);
+
+        Ok(normalize_max_history(value))
+    }
+
+    async fn prune_to_max_history(&self) -> anyhow::Result<()> {
+        let max_history = self.get_max_history().await?;
+        self.prune_history(max_history).await
+    }
+
+    async fn prune_history(&self, max_history: u32) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"
+            DELETE FROM clipboard_items
+            WHERE id NOT IN (
+                SELECT id
+                FROM clipboard_items
+                ORDER BY last_used_at DESC, id DESC
+                LIMIT ?
+            )
+            "#,
+        )
+        .bind(i64::from(max_history))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     async fn query_items(
         &self,
         query: Option<&str>,
         limit: u32,
     ) -> anyhow::Result<Vec<ClipboardItemSummary>> {
-        let capped_limit = limit.clamp(1, 100) as i64;
+        let capped_limit = limit.clamp(1, 250) as i64;
 
         let rows = if let Some(query) = query.filter(|query| !query.trim().is_empty()) {
             let pattern = format!("%{}%", query.trim());
@@ -207,7 +297,7 @@ impl Database {
                 SELECT id, created_at, last_used_at, kind, preview_text, source_app, size_bytes
                 FROM clipboard_items
                 WHERE preview_text LIKE ?
-                ORDER BY last_used_at DESC
+                ORDER BY last_used_at DESC, id DESC
                 LIMIT ?
                 "#,
             )
@@ -220,7 +310,7 @@ impl Database {
                 r#"
                 SELECT id, created_at, last_used_at, kind, preview_text, source_app, size_bytes
                 FROM clipboard_items
-                ORDER BY last_used_at DESC
+                ORDER BY last_used_at DESC, id DESC
                 LIMIT ?
                 "#,
             )
@@ -245,6 +335,10 @@ impl Database {
     }
 }
 
+fn normalize_max_history(value: u32) -> u32 {
+    value.clamp(MIN_MAX_HISTORY, MAX_MAX_HISTORY)
+}
+
 fn preview_text(text: &str) -> String {
     let mut preview = text.split_whitespace().collect::<Vec<_>>().join(" ");
 
@@ -254,4 +348,19 @@ fn preview_text(text: &str) -> String {
     }
 
     preview
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{normalize_max_history, DEFAULT_MAX_HISTORY, MAX_MAX_HISTORY, MIN_MAX_HISTORY};
+
+    #[test]
+    fn normalizes_max_history_bounds() {
+        assert_eq!(normalize_max_history(0), MIN_MAX_HISTORY);
+        assert_eq!(
+            normalize_max_history(DEFAULT_MAX_HISTORY),
+            DEFAULT_MAX_HISTORY
+        );
+        assert_eq!(normalize_max_history(u32::MAX), MAX_MAX_HISTORY);
+    }
 }

@@ -1,12 +1,10 @@
 [workspace]
 members = [
-    "crates/clipvaultd",
-    "crates/clipvault-app",
+    "crates/pasteharbord",
+    "crates/pasteharbor-app",
 ]
 resolver = "2"
 
 [workspace.package]
 edition = "2021"
 license = "MIT"
-repository = "https://example.local/clipvault"
-

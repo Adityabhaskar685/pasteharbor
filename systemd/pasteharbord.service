@@ -1,0 +1,12 @@
+[Unit]
+Description=PasteHarbor clipboard history daemon
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/pasteharbord
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target
