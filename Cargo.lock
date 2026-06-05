@@ -1334,9 +1334,17 @@ dependencies = [
  "chrono",
  "gtk4",
  "libadwaita",
- "serde",
+ "pasteharbor-core",
  "serde_json",
  "zbus",
+]
+
+[[package]]
+name = "pasteharbor-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1346,7 +1354,7 @@ dependencies = [
  "anyhow",
  "blake3",
  "chrono",
- "serde",
+ "pasteharbor-core",
  "serde_json",
  "sqlx",
  "tokio",

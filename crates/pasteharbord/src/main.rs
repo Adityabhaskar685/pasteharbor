@@ -4,14 +4,12 @@ mod service;
 
 use anyhow::Context;
 use db::Database;
+use pasteharbor_core::{BUS_NAME, OBJECT_PATH};
 use service::ClipboardService;
 use std::path::PathBuf;
 use tokio::signal;
 use tracing::info;
 use zbus::connection::Builder;
-
-const BUS_NAME: &str = "io.github.pasteharbor";
-const OBJECT_PATH: &str = "/io/github/pasteharbor/Clipboard1";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

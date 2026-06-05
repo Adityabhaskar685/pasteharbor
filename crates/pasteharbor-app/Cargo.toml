@@ -7,8 +7,8 @@ license.workspace = true
 [dependencies]
 anyhow = "1.0"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
+pasteharbor-core = { path = "../pasteharbor-core" }
 gtk = { package = "gtk4", version = "0.9" }
 adw = { package = "libadwaita", version = "0.7" }
-serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 zbus = { version = "5.0", default-features = false, features = ["blocking-api", "async-io"] }

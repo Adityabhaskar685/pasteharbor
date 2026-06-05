@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/pasteharbor-core",
     "crates/pasteharbord",
     "crates/pasteharbor-app",
 ]

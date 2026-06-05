@@ -1,6 +1,8 @@
 use anyhow::Context;
 use chrono::Utc;
-use serde::Serialize;
+use pasteharbor_core::{
+    normalize_max_history, AppSettings, ClipboardItemSummary, DEFAULT_MAX_HISTORY,
+};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 use std::path::PathBuf;
@@ -8,29 +10,9 @@ use std::str::FromStr;
 
 const MAX_TEXT_BYTES: usize = 1024 * 1024;
 const MAX_PREVIEW_CHARS: usize = 180;
-pub const DEFAULT_MAX_HISTORY: u32 = 500;
-pub const MIN_MAX_HISTORY: u32 = 10;
-pub const MAX_MAX_HISTORY: u32 = 10_000;
-
 #[derive(Clone)]
 pub struct Database {
     pool: SqlitePool,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ClipboardItemSummary {
-    pub id: i64,
-    pub created_at: String,
-    pub last_used_at: String,
-    pub kind: String,
-    pub preview_text: String,
-    pub source_app: Option<String>,
-    pub size_bytes: i64,
-}
-
-#[derive(Debug, Serialize)]
-pub struct AppSettings {
-    pub max_history: u32,
 }
 
 impl Database {
@@ -335,10 +317,6 @@ impl Database {
     }
 }
 
-fn normalize_max_history(value: u32) -> u32 {
-    value.clamp(MIN_MAX_HISTORY, MAX_MAX_HISTORY)
-}
-
 fn preview_text(text: &str) -> String {
     let mut preview = text.split_whitespace().collect::<Vec<_>>().join(" ");
 
@@ -348,19 +326,4 @@ fn preview_text(text: &str) -> String {
     }
 
     preview
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{normalize_max_history, DEFAULT_MAX_HISTORY, MAX_MAX_HISTORY, MIN_MAX_HISTORY};
-
-    #[test]
-    fn normalizes_max_history_bounds() {
-        assert_eq!(normalize_max_history(0), MIN_MAX_HISTORY);
-        assert_eq!(
-            normalize_max_history(DEFAULT_MAX_HISTORY),
-            DEFAULT_MAX_HISTORY
-        );
-        assert_eq!(normalize_max_history(u32::MAX), MAX_MAX_HISTORY);
-    }
 }

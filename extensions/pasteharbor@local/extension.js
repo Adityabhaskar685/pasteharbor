@@ -14,9 +14,79 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 const BUS_NAME = 'io.github.pasteharbor';
 const OBJECT_PATH = '/io/github/pasteharbor/Clipboard1';
 const INTERFACE = 'io.github.pasteharbor.Clipboard1';
+
 const POLL_SECONDS = 1;
 const POPUP_WIDTH = 560;
 const HISTORY_HEIGHT = 340;
+
+const METHOD = Object.freeze({
+    CAPTURE_TEXT: 'CaptureText',
+    LIST_RECENT: 'ListRecent',
+    SEARCH: 'Search',
+    GET_TEXT: 'GetText',
+    DELETE_ITEM: 'DeleteItem',
+    CLEAR: 'Clear',
+    GET_SETTINGS: 'GetSettings',
+    SET_MAX_HISTORY: 'SetMaxHistory',
+    SHOW_APP: 'ShowApp',
+});
+
+function callDaemon(method, parameters, callback = null) {
+    Gio.DBus.session.call(
+        BUS_NAME,
+        OBJECT_PATH,
+        INTERFACE,
+        method,
+        parameters,
+        null,
+        Gio.DBusCallFlags.NONE,
+        2000,
+        null,
+        (_connection, result) => {
+            let value = null;
+            try {
+                value = Gio.DBus.session.call_finish(result);
+            } catch (error) {
+                console.error(`PasteHarbor ${method} D-Bus call failed: ${error.message}`);
+            }
+
+            if (!callback)
+                return;
+
+            try {
+                callback(value);
+            } catch (error) {
+                logError(error, `PasteHarbor ${method} callback failed`);
+            }
+        }
+    );
+}
+
+function renderHistory(rows, items, status, createRow) {
+    if (!rows)
+        return;
+
+    rows.destroy_all_children();
+    if (status) {
+        rows.add_child(new St.Label({text: status, style: 'padding: 10px;'}));
+        return;
+    }
+
+    const seen = new Set();
+    for (const item of items ?? []) {
+        if (seen.has(item.id))
+            continue;
+        seen.add(item.id);
+        rows.add_child(createRow(item));
+    }
+}
+
+function menuLabel(text) {
+    const compact = String(text).replace(/\s+/g, ' ').trim();
+    if (compact.length <= 72)
+        return compact;
+    return `${compact.slice(0, 69)}...`;
+}
 
 const PasteHarborIndicator = GObject.registerClass(
 class PasteHarborIndicator extends PanelMenu.Button {
@@ -72,7 +142,7 @@ class PasteHarborIndicator extends PanelMenu.Button {
     }
 
     openApp() {
-        this._call('ShowApp', new GLib.Variant('()', []), result => {
+        this._call(METHOD.SHOW_APP, new GLib.Variant('()', []), result => {
             if (!result) {
                 Main.notify('PasteHarbor', 'Start pasteharbord, then try again.');
                 return;
@@ -94,7 +164,7 @@ class PasteHarborIndicator extends PanelMenu.Button {
                 return;
 
             this._lastText = text;
-            this._call('CaptureText', new GLib.Variant('(ssb)', [text, 'gnome-shell', false]), result => {
+            this._call(METHOD.CAPTURE_TEXT, new GLib.Variant('(ssb)', [text, 'gnome-shell', false]), result => {
                 if (result && !this.menu.isOpen)
                     this._reloadMenu();
             });
@@ -102,7 +172,7 @@ class PasteHarborIndicator extends PanelMenu.Button {
     }
 
     _loadSettings(callback = null) {
-        this._call('GetSettings', new GLib.Variant('()', []), result => {
+        this._call(METHOD.GET_SETTINGS, new GLib.Variant('()', []), result => {
             if (result) {
                 try {
                     const [json] = result.deep_unpack();
@@ -124,7 +194,7 @@ class PasteHarborIndicator extends PanelMenu.Button {
             return;
         }
 
-        this._call('SetMaxHistory', new GLib.Variant('(u)', [value]), result => {
+        this._call(METHOD.SET_MAX_HISTORY, new GLib.Variant('(u)', [value]), result => {
             if (!result) {
                 Main.notify('PasteHarbor', 'Could not save maximum history.');
                 return;
@@ -141,7 +211,7 @@ class PasteHarborIndicator extends PanelMenu.Button {
         this._renderHistory(null, 'Loading...');
 
         const query = this._query.trim();
-        const method = query ? 'Search' : 'ListRecent';
+        const method = query ? METHOD.SEARCH : METHOD.LIST_RECENT;
         const parameters = query
             ? new GLib.Variant('(su)', [query, this._limit])
             : new GLib.Variant('(u)', [this._limit]);
@@ -181,22 +251,7 @@ class PasteHarborIndicator extends PanelMenu.Button {
     }
 
     _renderHistory(items, status) {
-        if (!this._historyRows)
-            return;
-
-        this._historyRows.destroy_all_children();
-        if (status) {
-            this._historyRows.add_child(new St.Label({text: status, style: 'padding: 10px;'}));
-            return;
-        }
-
-        const seen = new Set();
-        for (const item of items ?? []) {
-            if (seen.has(item.id))
-                continue;
-            seen.add(item.id);
-            this._historyRows.add_child(this._historyRow(item));
-        }
+        renderHistory(this._historyRows, items, status, item => this._historyRow(item));
     }
 
     _updateSettingsControls() {
@@ -352,7 +407,7 @@ class PasteHarborIndicator extends PanelMenu.Button {
     _historyRow(item) {
         const row = new PopupMenu.PopupBaseMenuItem({reactive: true, can_focus: true});
         const label = new St.Label({
-            text: this._menuLabel(item.preview_text),
+            text: menuLabel(item.preview_text),
             x_expand: true,
             y_align: Clutter.ActorAlign.CENTER,
         });
@@ -375,7 +430,7 @@ class PasteHarborIndicator extends PanelMenu.Button {
     }
 
     _restoreText(id) {
-        this._call('GetText', new GLib.Variant('(x)', [id]), result => {
+        this._call(METHOD.GET_TEXT, new GLib.Variant('(x)', [id]), result => {
             if (!result)
                 return;
 
@@ -389,24 +444,17 @@ class PasteHarborIndicator extends PanelMenu.Button {
     }
 
     _deleteItem(id) {
-        this._call('DeleteItem', new GLib.Variant('(x)', [id]), result => {
+        this._call(METHOD.DELETE_ITEM, new GLib.Variant('(x)', [id]), result => {
             if (result)
                 this._reloadMenu();
         });
     }
 
     _clearHistory() {
-        this._call('Clear', new GLib.Variant('()', []), result => {
+        this._call(METHOD.CLEAR, new GLib.Variant('()', []), result => {
             if (result)
                 this._reloadMenu();
         });
-    }
-
-    _menuLabel(text) {
-        const compact = String(text).replace(/\s+/g, ' ').trim();
-        if (compact.length <= 72)
-            return compact;
-        return `${compact.slice(0, 69)}...`;
     }
 
     _iconButton(iconName, callback = null, accessibleName = null) {
@@ -433,34 +481,7 @@ class PasteHarborIndicator extends PanelMenu.Button {
     }
 
     _call(method, parameters, callback = null) {
-        Gio.DBus.session.call(
-            BUS_NAME,
-            OBJECT_PATH,
-            INTERFACE,
-            method,
-            parameters,
-            null,
-            Gio.DBusCallFlags.NONE,
-            2000,
-            null,
-            (_connection, result) => {
-                let value = null;
-                try {
-                    value = Gio.DBus.session.call_finish(result);
-                } catch (error) {
-                    console.error(`PasteHarbor ${method} D-Bus call failed: ${error.message}`);
-                }
-
-                if (!callback)
-                    return;
-
-                try {
-                    callback(value);
-                } catch (error) {
-                    logError(error, `PasteHarbor ${method} callback failed`);
-                }
-            }
-        );
+        callDaemon(method, parameters, callback);
     }
 });
 
