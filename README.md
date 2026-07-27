@@ -1,16 +1,17 @@
 # PasteHarbor
 
-PasteHarbor is a clipboard-history manager for Ubuntu GNOME on Wayland. A GNOME Shell extension captures copied text, a Rust daemon stores it in SQLite through SQLx, and a GTK4/libadwaita app provides a larger history view.
+PasteHarbor is a clipboard-history manager for Ubuntu GNOME on Wayland. A GNOME Shell extension captures copied text and images, a Rust daemon stores them in SQLite through SQLx, and a GTK4/libadwaita app provides a larger history view.
 
 ## Features
 
-- Searchable clipboard popup with a fixed-size scrollable history area
+- Captures both **text and images** copied to the clipboard; click any entry to copy it back
+- Image entries store a generated thumbnail, shown in both the popup and the app alongside pixel dimensions
+- **Source-app attribution**: each entry shows the icon and name of the app it was copied from
+- Modern GTK app (libadwaita rows, thumbnails, empty state, toast feedback) with live refresh, search, clear confirmation, and settings
+- Searchable Super+V popup that **scales to the monitor** and shows history up to the configured maximum
 - Copy, delete, clear-all, pause-capture, and maximum-history controls
-- GTK app with live refresh, search, clear confirmation, and settings
 - SQLx + SQLite storage with duplicate detection and basic secret filtering
-- User systemd service that starts at login and restarts after failures
-
-PasteHarbor currently stores text only. Image and file support are planned separately.
+- User systemd service that starts at login, restarts after failures, and self-heals if it loses its D-Bus name (e.g. after logout/login)
 
 ## Install
 
@@ -32,7 +33,7 @@ Log out and log back in once so GNOME Shell discovers the extension, then enable
 gnome-extensions enable pasteharbor@local
 ```
 
-Click the panel icon or press `<Super>V` to open clipboard history. The daemon starts automatically on future logins.
+Click the panel icon or press `<Super>V` to open clipboard history. The extension takes `<Super>V` over from GNOME's default notification-tray shortcut while enabled and restores it on disable (`<Super>M` still toggles the tray). The daemon starts automatically on future logins.
 
 ## Service
 
@@ -42,7 +43,7 @@ systemctl --user restart pasteharbord.service
 journalctl --user -u pasteharbord.service -f
 ```
 
-History is stored at `~/.local/share/pasteharbor/pasteharbor.db`.
+History is stored at `~/.local/share/pasteharbor/pasteharbor.db`, including image bytes and thumbnails as blobs. The database migrates in place on startup when new columns are introduced.
 
 ## Development
 
