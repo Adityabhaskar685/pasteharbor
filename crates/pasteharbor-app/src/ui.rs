@@ -173,14 +173,8 @@ pub fn build_ui(app: &adw::Application) {
     content.append(&search);
     content.append(&stack);
 
-    let clamp = adw::Clamp::builder()
-        .maximum_size(760)
-        .tightening_threshold(600)
-        .child(&content)
-        .build();
-
     let toasts = adw::ToastOverlay::new();
-    toasts.set_child(Some(&clamp));
+    toasts.set_child(Some(&content));
 
     let toolbar = adw::ToolbarView::new();
     toolbar.add_top_bar(&header);

@@ -548,8 +548,8 @@ class PasteHarborIndicator extends PanelMenu.Button {
             this.menu.close();
         };
 
-        row.add_child(this._iconButton('edit-copy-symbolic', restore, 'Copy item'));
-        row.add_child(this._iconButton('user-trash-symbolic', () => this._deleteItem(item.id), 'Delete item'));
+        row.add_child(this._iconButton('edit-copy-symbolic', restore, 'Copy item', 'ph-icon-button'));
+        row.add_child(this._iconButton('user-trash-symbolic', () => this._deleteItem(item.id), 'Delete item', 'ph-icon-button'));
 
         row.connect('activate', restore);
         return row;
@@ -668,9 +668,9 @@ class PasteHarborIndicator extends PanelMenu.Button {
         });
     }
 
-    _iconButton(iconName, callback = null, accessibleName = null) {
+    _iconButton(iconName, callback = null, accessibleName = null, styleClass = 'button') {
         const button = new St.Button({
-            style_class: 'button',
+            style_class: styleClass,
             can_focus: true,
             accessible_name: accessibleName,
             child: new St.Icon({icon_name: iconName, style_class: 'popup-menu-icon'}),

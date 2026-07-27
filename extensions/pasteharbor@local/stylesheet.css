@@ -1,0 +1,18 @@
+/* Flat, borderless copy/delete buttons on history rows, matching the app. */
+.ph-icon-button {
+    padding: 6px;
+    border-radius: 8px;
+    border: none;
+    background-color: transparent;
+    box-shadow: none;
+    color: inherit;
+}
+
+.ph-icon-button:hover,
+.ph-icon-button:focus {
+    background-color: rgba(127, 127, 127, 0.18);
+}
+
+.ph-icon-button:active {
+    background-color: rgba(127, 127, 127, 0.30);
+}
