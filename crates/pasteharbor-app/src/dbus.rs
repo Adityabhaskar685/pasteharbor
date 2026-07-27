@@ -29,6 +29,16 @@ impl AppState {
         Ok(proxy.call(method::GET_TEXT, &(id))?)
     }
 
+    pub fn get_image(&self, id: i64) -> anyhow::Result<(Vec<u8>, String)> {
+        let proxy = self.proxy()?;
+        Ok(proxy.call(method::GET_IMAGE, &(id))?)
+    }
+
+    pub fn get_thumbnail(&self, id: i64) -> anyhow::Result<Vec<u8>> {
+        let proxy = self.proxy()?;
+        Ok(proxy.call(method::GET_THUMBNAIL, &(id))?)
+    }
+
     pub fn delete_item(&self, id: i64) -> anyhow::Result<bool> {
         let proxy = self.proxy()?;
         Ok(proxy.call(method::DELETE_ITEM, &(id))?)

@@ -40,6 +40,24 @@ impl ClipboardService {
             .map_err(failed)
     }
 
+    async fn capture_image(
+        &self,
+        bytes: Vec<u8>,
+        mime: &str,
+        source_app: &str,
+        sensitive: bool,
+    ) -> fdo::Result<i64> {
+        self.database
+            .capture_image(
+                &bytes,
+                Some(mime).filter(|value| !value.is_empty()),
+                Some(source_app).filter(|value| !value.is_empty()),
+                sensitive,
+            )
+            .await
+            .map_err(failed)
+    }
+
     async fn list_recent(&self, limit: u32) -> fdo::Result<String> {
         let items = self.database.list_recent(limit).await.map_err(failed)?;
         serde_json::to_string(&items).map_err(failed)
@@ -60,6 +78,27 @@ impl ClipboardService {
             }
             None => Err(fdo::Error::FileNotFound(format!(
                 "clipboard item {id} not found"
+            ))),
+        }
+    }
+
+    async fn get_image(&self, id: i64) -> fdo::Result<(Vec<u8>, String)> {
+        match self.database.get_image(id).await.map_err(failed)? {
+            Some((bytes, mime)) => {
+                self.database.touch(id).await.map_err(failed)?;
+                Ok((bytes, mime))
+            }
+            None => Err(fdo::Error::FileNotFound(format!(
+                "image item {id} not found"
+            ))),
+        }
+    }
+
+    async fn get_thumbnail(&self, id: i64) -> fdo::Result<Vec<u8>> {
+        match self.database.get_thumbnail(id).await.map_err(failed)? {
+            Some(bytes) => Ok(bytes),
+            None => Err(fdo::Error::FileNotFound(format!(
+                "thumbnail for item {id} not found"
             ))),
         }
     }

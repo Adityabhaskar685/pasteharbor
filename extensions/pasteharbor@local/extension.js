@@ -18,18 +18,27 @@ const INTERFACE = 'io.github.pasteharbor.Clipboard1';
 const POLL_SECONDS = 1;
 const POPUP_WIDTH = 560;
 const HISTORY_HEIGHT = 340;
+// The daemon clamps ListRecent/Search to 250 rows, so never ask for more.
+const LIST_LIMIT_CAP = 250;
+const TRAY_KEYBINDING = 'toggle-message-tray';
 
 const METHOD = Object.freeze({
     CAPTURE_TEXT: 'CaptureText',
+    CAPTURE_IMAGE: 'CaptureImage',
     LIST_RECENT: 'ListRecent',
     SEARCH: 'Search',
     GET_TEXT: 'GetText',
+    GET_IMAGE: 'GetImage',
+    GET_THUMBNAIL: 'GetThumbnail',
     DELETE_ITEM: 'DeleteItem',
     CLEAR: 'Clear',
     GET_SETTINGS: 'GetSettings',
     SET_MAX_HISTORY: 'SetMaxHistory',
     SHOW_APP: 'ShowApp',
 });
+
+// Clipboard image formats we try to read, best first.
+const IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/bmp'];
 
 function callDaemon(method, parameters, callback = null) {
     Gio.DBus.session.call(
@@ -94,6 +103,7 @@ class PasteHarborIndicator extends PanelMenu.Button {
         super._init(0.0, 'PasteHarbor');
 
         this._lastText = null;
+        this._lastImageSig = null;
         this._pollId = 0;
         this._reloadToken = 0;
         this._query = '';
@@ -123,11 +133,11 @@ class PasteHarborIndicator extends PanelMenu.Button {
             GLib.PRIORITY_DEFAULT,
             POLL_SECONDS,
             () => {
-                this._captureCurrentText();
+                this._captureClipboard();
                 return GLib.SOURCE_CONTINUE;
             }
         );
-        this._captureCurrentText();
+        this._captureClipboard();
     }
 
     stop() {
@@ -154,21 +164,77 @@ class PasteHarborIndicator extends PanelMenu.Button {
         });
     }
 
-    _captureCurrentText() {
+    _captureClipboard() {
         if (this._capturePaused)
             return;
 
+        this._captureCurrentText();
+        this._captureCurrentImage();
+    }
+
+    _captureCurrentText() {
         const clipboard = St.Clipboard.get_default();
         clipboard.get_text(St.ClipboardType.CLIPBOARD, (_clipboard, text) => {
             if (!text || text === this._lastText)
                 return;
 
             this._lastText = text;
-            this._call(METHOD.CAPTURE_TEXT, new GLib.Variant('(ssb)', [text, 'gnome-shell', false]), result => {
+            const source = this._currentSourceApp();
+            this._call(METHOD.CAPTURE_TEXT, new GLib.Variant('(ssb)', [text, source, false]), result => {
                 if (result && !this.menu.isOpen)
                     this._reloadMenu();
             });
         });
+    }
+
+    _captureCurrentImage() {
+        const clipboard = St.Clipboard.get_default();
+        const mimetype = this._pickImageMime(clipboard.get_mimetypes(St.ClipboardType.CLIPBOARD));
+        if (!mimetype)
+            return;
+
+        clipboard.get_content(St.ClipboardType.CLIPBOARD, mimetype, (_clipboard, bytes) => {
+            const size = bytes ? bytes.get_size() : 0;
+            if (!size)
+                return;
+
+            const signature = `${mimetype}:${size}`;
+            if (signature === this._lastImageSig)
+                return;
+            this._lastImageSig = signature;
+
+            const data = bytes.get_data();
+            const source = this._currentSourceApp();
+            this._call(
+                METHOD.CAPTURE_IMAGE,
+                new GLib.Variant('(ayssb)', [data, mimetype, source, false]),
+                result => {
+                    if (result && !this.menu.isOpen)
+                        this._reloadMenu();
+                }
+            );
+        });
+    }
+
+    _pickImageMime(mimetypes) {
+        const available = mimetypes ?? [];
+        for (const mimetype of IMAGE_MIME_TYPES) {
+            if (available.includes(mimetype))
+                return mimetype;
+        }
+        return available.find(mimetype => mimetype.startsWith('image/')) ?? null;
+    }
+
+    _currentSourceApp() {
+        try {
+            const window = global.display.get_focus_window();
+            if (!window)
+                return 'gnome-shell';
+            const app = Shell.WindowTracker.get_default().get_window_app(window);
+            return app ? app.get_id() : 'gnome-shell';
+        } catch (_error) {
+            return 'gnome-shell';
+        }
     }
 
     _loadSettings(callback = null) {
@@ -181,10 +247,17 @@ class PasteHarborIndicator extends PanelMenu.Button {
                     // Keep the last valid value if settings cannot be decoded.
                 }
             }
+            this._syncLimit();
             this._updateSettingsControls();
             if (callback)
                 callback();
         });
+    }
+
+    _syncLimit() {
+        // Show as much of the stored history as the daemon will return so the
+        // popup matches the configured maximum instead of a fixed page size.
+        this._limit = Math.min(this._maxHistory, LIST_LIMIT_CAP);
     }
 
     _saveMaxHistory(text) {
@@ -201,6 +274,7 @@ class PasteHarborIndicator extends PanelMenu.Button {
             }
             const [saved] = result.deep_unpack();
             this._maxHistory = saved;
+            this._syncLimit();
             this._updateSettingsControls();
             this._reloadMenu();
         });
@@ -405,28 +479,111 @@ class PasteHarborIndicator extends PanelMenu.Button {
     }
 
     _historyRow(item) {
+        const isImage = item.kind === 'image';
         const row = new PopupMenu.PopupBaseMenuItem({reactive: true, can_focus: true});
-        const label = new St.Label({
-            text: menuLabel(item.preview_text),
+        row.set_style('padding: 6px 8px; border-radius: 8px; spacing: 10px;');
+
+        row.add_child(this._leadingIcon(item, isImage));
+
+        const textBox = new St.BoxLayout({
+            vertical: true,
             x_expand: true,
             y_align: Clutter.ActorAlign.CENTER,
+            style: 'spacing: 2px;',
         });
-        row.add_child(label);
+        textBox.add_child(new St.Label({text: menuLabel(item.preview_text)}));
+        const subtitle = this._subtitle(item, isImage);
+        if (subtitle) {
+            textBox.add_child(new St.Label({
+                text: subtitle,
+                style: 'font-size: 0.8em; opacity: 0.6;',
+            }));
+        }
+        row.add_child(textBox);
 
-        const copyButton = this._iconButton('edit-copy-symbolic', () => {
-            this._restoreText(item.id);
+        const restore = () => {
+            if (isImage)
+                this._restoreImage(item.id);
+            else
+                this._restoreText(item.id);
             this.menu.close();
-        }, 'Copy item');
-        row.add_child(copyButton);
+        };
 
-        const deleteButton = this._iconButton('user-trash-symbolic', () => this._deleteItem(item.id), 'Delete item');
-        row.add_child(deleteButton);
+        row.add_child(this._iconButton('edit-copy-symbolic', restore, 'Copy item'));
+        row.add_child(this._iconButton('user-trash-symbolic', () => this._deleteItem(item.id), 'Delete item'));
 
-        row.connect('activate', () => {
-            this._restoreText(item.id);
-            this.menu.close();
-        });
+        row.connect('activate', restore);
         return row;
+    }
+
+    _leadingIcon(item, isImage) {
+        const icon = new St.Icon({
+            icon_size: 32,
+            y_align: Clutter.ActorAlign.CENTER,
+            style: 'border-radius: 6px;',
+        });
+
+        if (isImage && item.has_thumbnail) {
+            icon.set_icon_name('image-x-generic-symbolic');
+            this._applyThumbnail(icon, item.id);
+            return icon;
+        }
+
+        const appGicon = this._appGicon(item.source_app);
+        if (appGicon)
+            icon.set_gicon(appGicon);
+        else
+            icon.set_icon_name(isImage ? 'image-x-generic-symbolic' : 'edit-paste-symbolic');
+        return icon;
+    }
+
+    _subtitle(item, isImage) {
+        const parts = [];
+        const appName = this._appName(item.source_app);
+        if (appName)
+            parts.push(appName);
+        if (isImage && item.width && item.height)
+            parts.push(`${item.width}×${item.height}`);
+        return parts.join('  ·  ');
+    }
+
+    _lookupApp(sourceApp) {
+        if (!sourceApp || sourceApp === 'gnome-shell')
+            return null;
+        try {
+            const appSystem = Shell.AppSystem.get_default();
+            let app = appSystem.lookup_app(sourceApp);
+            if (!app && !sourceApp.endsWith('.desktop'))
+                app = appSystem.lookup_app(`${sourceApp}.desktop`);
+            return app;
+        } catch (_error) {
+            return null;
+        }
+    }
+
+    _appGicon(sourceApp) {
+        const app = this._lookupApp(sourceApp);
+        return app ? app.get_icon() : null;
+    }
+
+    _appName(sourceApp) {
+        const app = this._lookupApp(sourceApp);
+        return app ? app.get_name() : null;
+    }
+
+    _applyThumbnail(icon, id) {
+        this._call(METHOD.GET_THUMBNAIL, new GLib.Variant('(x)', [id]), result => {
+            if (!result)
+                return;
+            const [bytes] = result.deep_unpack();
+            if (!bytes || !bytes.length)
+                return;
+            try {
+                icon.set_gicon(Gio.BytesIcon.new(GLib.Bytes.new(bytes)));
+            } catch (error) {
+                console.error(`PasteHarbor thumbnail decode failed: ${error.message}`);
+            }
+        });
     }
 
     _restoreText(id) {
@@ -440,6 +597,21 @@ class PasteHarborIndicator extends PanelMenu.Button {
 
             St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, text);
             this._lastText = text;
+        });
+    }
+
+    _restoreImage(id) {
+        this._call(METHOD.GET_IMAGE, new GLib.Variant('(x)', [id]), result => {
+            if (!result)
+                return;
+
+            const [bytes, mimetype] = result.deep_unpack();
+            if (!bytes || !bytes.length)
+                return;
+
+            const glibBytes = GLib.Bytes.new(bytes);
+            this._lastImageSig = `${mimetype}:${glibBytes.get_size()}`;
+            St.Clipboard.get_default().set_content(St.ClipboardType.CLIPBOARD, mimetype, glibBytes);
         });
     }
 
@@ -491,6 +663,11 @@ export default class PasteHarborExtension extends Extension {
         Main.panel.addToStatusArea(this.uuid, this._indicator);
         this._indicator.start();
 
+        // GNOME Shell binds <Super>V to toggle-message-tray by default, which
+        // collides with our show-history binding and makes Super+V flaky.
+        // Release the conflicting variant while enabled and restore it later.
+        this._releaseTrayShortcut();
+
         this._settings = this.getSettings();
         Main.wm.addKeybinding(
             'show-history',
@@ -503,6 +680,7 @@ export default class PasteHarborExtension extends Extension {
 
     disable() {
         Main.wm.removeKeybinding('show-history');
+        this._restoreTrayShortcut();
 
         if (this._indicator) {
             this._indicator.stop();
@@ -511,5 +689,31 @@ export default class PasteHarborExtension extends Extension {
         }
 
         this._settings = null;
+    }
+
+    _conflictsWithSuperV(binding) {
+        return String(binding).replace(/\s+/g, '').toLowerCase() === '<super>v';
+    }
+
+    _releaseTrayShortcut() {
+        this._shellKeybindings = new Gio.Settings({
+            schema_id: 'org.gnome.shell.keybindings',
+        });
+        const current = this._shellKeybindings.get_strv(TRAY_KEYBINDING);
+        const filtered = current.filter(binding => !this._conflictsWithSuperV(binding));
+        if (filtered.length === current.length) {
+            this._savedTrayShortcut = null;
+            return;
+        }
+
+        this._savedTrayShortcut = current;
+        this._shellKeybindings.set_strv(TRAY_KEYBINDING, filtered);
+    }
+
+    _restoreTrayShortcut() {
+        if (this._shellKeybindings && this._savedTrayShortcut)
+            this._shellKeybindings.set_strv(TRAY_KEYBINDING, this._savedTrayShortcut);
+        this._savedTrayShortcut = null;
+        this._shellKeybindings = null;
     }
 }

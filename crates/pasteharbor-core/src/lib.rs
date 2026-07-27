@@ -11,15 +11,24 @@ pub const MAX_MAX_HISTORY: u32 = 10_000;
 
 pub mod method {
     pub const CAPTURE_TEXT: &str = "CaptureText";
+    pub const CAPTURE_IMAGE: &str = "CaptureImage";
     pub const LIST_RECENT: &str = "ListRecent";
     pub const SEARCH: &str = "Search";
     pub const GET_TEXT: &str = "GetText";
+    pub const GET_IMAGE: &str = "GetImage";
+    pub const GET_THUMBNAIL: &str = "GetThumbnail";
     pub const DELETE_ITEM: &str = "DeleteItem";
     pub const CLEAR: &str = "Clear";
     pub const GET_SETTINGS: &str = "GetSettings";
     pub const SET_MAX_HISTORY: &str = "SetMaxHistory";
     pub const SHOW_APP: &str = "ShowApp";
     pub const HEALTH: &str = "Health";
+}
+
+/// Clipboard item kinds, as stored in the `kind` column and serialized to JSON.
+pub mod kind {
+    pub const TEXT: &str = "text";
+    pub const IMAGE: &str = "image";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,6 +40,17 @@ pub struct ClipboardItemSummary {
     pub preview_text: String,
     pub source_app: Option<String>,
     pub size_bytes: i64,
+    /// MIME type for image items (e.g. `image/png`); `None` for text.
+    #[serde(default)]
+    pub mime_type: Option<String>,
+    /// Pixel dimensions for image items; `None` for text.
+    #[serde(default)]
+    pub width: Option<i64>,
+    #[serde(default)]
+    pub height: Option<i64>,
+    /// Whether a thumbnail is available to fetch via `GetThumbnail`.
+    #[serde(default)]
+    pub has_thumbnail: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,6 +76,10 @@ mod tests {
             preview_text: "hello from PasteHarbor".to_string(),
             source_app: Some("gnome-shell".to_string()),
             size_bytes: 22,
+            mime_type: None,
+            width: None,
+            height: None,
+            has_thumbnail: false,
         };
 
         let json = serde_json::to_string(&item).unwrap();
