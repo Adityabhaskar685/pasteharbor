@@ -62,6 +62,29 @@ impl Ui {
     }
 }
 
+/// Default window size scaled to the primary monitor (50% width, 70% height),
+/// clamped to comfortable bounds. Falls back to a fixed size when no monitor
+/// geometry is available.
+fn default_window_size() -> (i32, i32) {
+    const FALLBACK: (i32, i32) = (820, 680);
+
+    let Some(display) = gtk::gdk::Display::default() else {
+        return FALLBACK;
+    };
+    let Some(monitor) = display
+        .monitors()
+        .item(0)
+        .and_then(|object| object.downcast::<gtk::gdk::Monitor>().ok())
+    else {
+        return FALLBACK;
+    };
+
+    let geometry = monitor.geometry();
+    let width = (f64::from(geometry.width()) * 0.5).clamp(640.0, 1100.0) as i32;
+    let height = (f64::from(geometry.height()) * 0.7).clamp(520.0, 1000.0) as i32;
+    (width, height)
+}
+
 fn install_css() {
     let provider = gtk::CssProvider::new();
     provider.load_from_string(APP_CSS);
@@ -86,11 +109,12 @@ pub fn build_ui(app: &adw::Application) {
     let settings = Rc::new(UiSettings::default());
     let cache = Rc::new(RefCell::new(String::new()));
 
+    let (window_width, window_height) = default_window_size();
     let window = adw::ApplicationWindow::builder()
         .application(app)
         .title("PasteHarbor")
-        .default_width(820)
-        .default_height(680)
+        .default_width(window_width)
+        .default_height(window_height)
         .build();
 
     let title = adw::WindowTitle::new("PasteHarbor", "Clipboard history");
