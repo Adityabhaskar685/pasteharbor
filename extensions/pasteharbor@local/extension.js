@@ -16,8 +16,16 @@ const OBJECT_PATH = '/io/github/pasteharbor/Clipboard1';
 const INTERFACE = 'io.github.pasteharbor.Clipboard1';
 
 const POLL_SECONDS = 1;
+// Fallback popup size used only when the monitor geometry is unavailable.
 const POPUP_WIDTH = 560;
 const HISTORY_HEIGHT = 340;
+// Popup size as a fraction of the monitor, clamped to sensible pixel bounds.
+const POPUP_WIDTH_RATIO = 0.30;
+const POPUP_WIDTH_MIN = 420;
+const POPUP_WIDTH_MAX = 760;
+const HISTORY_HEIGHT_RATIO = 0.55;
+const HISTORY_HEIGHT_MIN = 280;
+const HISTORY_HEIGHT_MAX = 760;
 // The daemon clamps ListRecent/Search to 250 rows, so never ask for more.
 const LIST_LIMIT_CAP = 250;
 const TRAY_KEYBINDING = 'toggle-message-tray';
@@ -71,6 +79,10 @@ function callDaemon(method, parameters, callback = null) {
     );
 }
 
+function clamp(value, min, max) {
+    return Math.min(Math.max(value, min), max);
+}
+
 function renderHistory(rows, items, status, createRow) {
     if (!rows)
         return;
@@ -119,6 +131,7 @@ class PasteHarborIndicator extends PanelMenu.Button {
         this.add_child(this._icon);
         this.menu.connect('open-state-changed', (_menu, open) => {
             if (open) {
+                this._applyMenuMetrics();
                 this._loadSettings();
                 this._reloadMenu();
             }
@@ -320,8 +333,32 @@ class PasteHarborIndicator extends PanelMenu.Button {
         this._addSettingsRows();
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this._addHistoryViewport();
+        this._applyMenuMetrics();
         this._updateSettingsControls();
         this._updateSettingsVisibility();
+    }
+
+    _menuMetrics() {
+        const monitor = Main.layoutManager.primaryMonitor;
+        if (!monitor)
+            return {width: POPUP_WIDTH, height: HISTORY_HEIGHT};
+
+        return {
+            width: Math.round(
+                clamp(monitor.width * POPUP_WIDTH_RATIO, POPUP_WIDTH_MIN, POPUP_WIDTH_MAX)
+            ),
+            height: Math.round(
+                clamp(monitor.height * HISTORY_HEIGHT_RATIO, HISTORY_HEIGHT_MIN, HISTORY_HEIGHT_MAX)
+            ),
+        };
+    }
+
+    _applyMenuMetrics() {
+        const {width, height} = this._menuMetrics();
+        if (this._searchRow)
+            this._searchRow.set_style(`width: ${width}px;`);
+        if (this._scrollView)
+            this._scrollView.set_style(`width: ${width}px; height: ${height}px;`);
     }
 
     _renderHistory(items, status) {
@@ -361,6 +398,7 @@ class PasteHarborIndicator extends PanelMenu.Button {
 
     _addSearchRow() {
         const row = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false});
+        this._searchRow = row;
         row.set_style(`width: ${POPUP_WIDTH}px;`);
         const entry = new St.Entry({
             hint_text: 'Search history',
@@ -474,6 +512,7 @@ class PasteHarborIndicator extends PanelMenu.Button {
         viewportItem.add_child(scrollView);
         this.menu.addMenuItem(viewportItem);
 
+        this._scrollView = scrollView;
         this._historyRows = rows;
         this._renderHistory(null, 'Loading...');
     }
